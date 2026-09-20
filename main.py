@@ -147,10 +147,31 @@ async def telegram_bot_loop(session):
   except Exception as ex:
    log.warning("telegram polling %s",ex); await asyncio.sleep(3)
 
+async def http_handler(reader,writer):
+ try:
+  line=await reader.readline(); path=line.decode(errors="ignore").split(" ")[1] if b" " in line else "/"
+  while True:
+   h=await reader.readline()
+   if h in (b"\r\n",b"\n",b""): break
+  if path=="/health":
+   body=json.dumps({"ok":True,**E.status()}).encode(); ct="application/json"
+  else:
+   s=E.status(); rows="".join(f"<tr><td>{g}</td><td>{s['groups'].get(g,'N/A')}</td></tr>" for g in GROUPS)
+   body=f"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>body{{font-family:system-ui;background:#111;color:#eee;max-width:700px;margin:auto;padding:20px}}h1{{font-size:24px}}.score{{font-size:38px;font-weight:700}}table{{width:100%;border-collapse:collapse}}td{{padding:9px;border-bottom:1px solid #333}}td:last-child{{text-align:right;font-weight:700}}small{{color:#aaa}}</style></head><body><h1>₿ BTC AGENT LIVE</h1><div class="score">{s['final'] if s['final'] is not None else 'N/A'} / 100</div><h2>{signal_label(s['final'])}</h2><table>{rows}</table><p>FEATURES ACTIVE: {s['features_active']} / {s['features_total']}</p><small>Auto refresh 5s · live engine is event-driven</small></body></html>""".encode(); ct="text/html; charset=utf-8"
+  writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
+ except Exception as ex: log.warning("http %s",ex)
+ finally:
+  writer.close(); await writer.wait_closed()
+
+async def http_server():
+ port=int(os.getenv("PORT","8080")); server=await asyncio.start_server(http_handler,"0.0.0.0",port)
+ log.info("HTTP listening on %s",port)
+ async with server: await server.serve_forever()
+
 async def heartbeat():
  while True: log.info("STATE %s",json.dumps(E.status(),ensure_ascii=False)); await asyncio.sleep(10)
 
 async def main():
  async with aiohttp.ClientSession(headers={"User-Agent":"btc-agent-live/1.0"}) as s:
-  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),telegram_bot_loop(s),heartbeat())
+  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),telegram_bot_loop(s),http_server(),heartbeat())
 if __name__=="__main__": asyncio.run(main())
