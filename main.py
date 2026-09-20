@@ -21,21 +21,31 @@ class Engine:
   self.groups=groups; self.final=sum(groups.values())/len(groups) if groups else None
  def status(self):
   self.recalc(); return {"final":None if self.final is None else round(self.final,2),"groups":{k:round(v,2) for k,v in self.groups.items()},"features_active":sum(1 for v in self.features.values() if time.time()-v["ts"]<=STALE.get(v["source"],3600)),"features_total":len(self.features)}
-E=Engine(); prices=deque(maxlen=1200); last_trade_side=None
+E=Engine(); prices=deque(maxlen=5000); last_trade_side=None
 
 def price_features(px):
- prices.append(px)
- if len(prices)>1:
-  for n in (1,5,10,20,60,120,300,600):
-   if len(prices)>n:
-    r=(px/prices[-n-1]-1)*100; E.update(f"price.return.tick_{n}",r,50+r*12,"PRICE ACTION","OKX")
- for n in (10,20,50,100,200):
-  if len(prices)>=n:
-   ma=sum(list(prices)[-n:])/n; d=(px/ma-1)*100; E.update(f"technical.sma_distance.{n}",d,50+d*10,"TECHNICAL","OKX")
- if len(prices)>=30:
-  recent=list(prices)[-30:]; hi=max(recent); lo=min(recent)
-  pos=50 if hi==lo else (px-lo)/(hi-lo)*100; E.update("price.range_position.30",pos,pos,"PRICE ACTION","OKX")
-
+ prices.append(px); p=list(prices)
+ if len(p)>1:
+  for n in (1,2,3,5,8,10,15,20,30,45,60,90,120,180,240,300,450,600,900,1200):
+   if len(p)>n:
+    r=(px/p[-n-1]-1)*100
+    E.update(f"price.return.tick_{n}",r,50+r*12,"PRICE ACTION","OKX")
+ for n in (5,8,10,13,20,21,30,34,50,55,75,89,100,144,200,233,300,377,500):
+  if len(p)>=n:
+   w=p[-n:]; ma=sum(w)/n; d=(px/ma-1)*100
+   E.update(f"technical.sma_distance.{n}",d,50+d*10,"TECHNICAL","OKX")
+   if n>=10:
+    mean=ma; var=sum((x-mean)**2 for x in w)/n; sd=var**0.5
+    z=0 if sd==0 else (px-mean)/sd
+    E.update(f"technical.zscore.{n}",z,50+z*10,"TECHNICAL","OKX")
+    vol=0 if mean==0 else sd/mean*100
+    E.update(f"technical.volatility.{n}",vol,50+(1.5-vol)*5,"TECHNICAL","OKX")
+ for n in (10,20,30,50,75,100,120,180,240,300,500,900):
+  if len(p)>=n:
+   w=p[-n:]; hi=max(w); lo=min(w); pos=50 if hi==lo else (px-lo)/(hi-lo)*100
+   E.update(f"price.range_position.{n}",pos,pos,"PRICE ACTION","OKX")
+   E.update(f"price.drawdown_from_high.{n}",(px/hi-1)*100,50+(px/hi-1)*500,"PRICE ACTION","OKX")
+   E.update(f"price.distance_from_low.{n}",(px/lo-1)*100,50+(px/lo-1)*500,"PRICE ACTION","OKX")
  regime_features()
 
 async def okx_ws():
@@ -57,7 +67,7 @@ async def okx_ws():
         E.update("liquidity.spread_bps",spread,50-spread*8,"LIQUIDITY","OKX")
       elif ch=="books5":
        bids=d.get("bids",[]); asks=d.get("asks",[])
-       for depth in (1,3,5):
+       for depth in (1,2,3,4,5):
         bv=sum(float(x[1]) for x in bids[:depth]); av=sum(float(x[1]) for x in asks[:depth]); tot=bv+av
         if tot: E.update(f"orderflow.imbalance.depth_{depth}",(bv-av)/tot,50+50*(bv-av)/tot,"ORDER FLOW","OKX")
       elif ch=="trades":
@@ -92,11 +102,14 @@ async def cross_market_loop(session):
   await asyncio.sleep(300)
 
 def regime_features():
- if len(prices)<120:return
+ if len(prices)<30:return
  p=list(prices); px=p[-1]
- for n in (30,60,120):
-  ma=sum(p[-n:])/n; z=(px/ma-1)*100; E.update(f"regime.trend.{n}",z,50+z*12,"MARKET REGIME","OKX")
- hi=max(p[-120:]); lo=min(p[-120:]); pos=50 if hi==lo else (px-lo)/(hi-lo)*100; E.update("regime.range.120",pos,pos,"MARKET REGIME","OKX")
+ for n in (30,45,60,90,120,180,240,300,450,600,900,1200):
+  if len(p)>=n:
+   w=p[-n:]; ma=sum(w)/n; z=(px/ma-1)*100
+   E.update(f"regime.trend.{n}",z,50+z*12,"MARKET REGIME","OKX")
+   hi=max(w); lo=min(w); pos=50 if hi==lo else (px-lo)/(hi-lo)*100
+   E.update(f"regime.range.{n}",pos,pos,"MARKET REGIME","OKX")
 
 async def macro_loop(session):
  indicators={
