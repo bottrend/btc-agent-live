@@ -85,11 +85,9 @@ async def mempool_loop(session):
 async def cross_market_loop(session):
  while True:
   try:
-   async with session.get("https://api.coingecko.com/api/v3/simple/price",params={"ids":"bitcoin,ethereum","vs_currencies":"usd","include_24hr_change":"true"},timeout=20) as r:x=await r.json()
-   bc=float(x["bitcoin"].get("usd_24h_change") or 0); ec=float(x["ethereum"].get("usd_24h_change") or 0)
-   E.update("cross.btc_24h_change",bc,50+bc*3,"CROSS-MARKET","COINGECKO")
-   E.update("cross.eth_24h_change",ec,50+ec*3,"CROSS-MARKET","COINGECKO")
-   E.update("cross.btc_vs_eth_24h",bc-ec,50+(bc-ec)*5,"CROSS-MARKET","COINGECKO")
+   async with session.get("https://api.coingecko.com/api/v3/simple/price",params={"ids":"bitcoin,ethereum","vs_currencies":"usd","include_24hr_change":"true"},timeout=20) as r:d=await r.json()
+   bc=float(d["bitcoin"].get("usd_24h_change") or 0); ec=float(d["ethereum"].get("usd_24h_change") or 0)
+   E.update("cross.btc_24h",bc,50+bc*3,"CROSS-MARKET","COINGECKO"); E.update("cross.eth_24h",ec,50+ec*3,"CROSS-MARKET","COINGECKO"); E.update("cross.btc_vs_eth",bc-ec,50+(bc-ec)*5,"CROSS-MARKET","COINGECKO")
   except Exception as ex: log.warning("cross-market %s",ex)
   await asyncio.sleep(300)
 
@@ -97,30 +95,20 @@ def regime_features():
  if len(prices)<120:return
  p=list(prices); px=p[-1]
  for n in (30,60,120):
-  ma=sum(p[-n:])/n; trend=(px/ma-1)*100
-  E.update(f"regime.trend.{n}",trend,50+trend*12,"MARKET REGIME","OKX")
- rets=[(p[i]/p[i-1]-1)*100 for i in range(len(p)-59,len(p)) if p[i-1]]
- if rets:
-  vol=(sum(x*x for x in rets)/len(rets))**0.5
-  E.update("regime.volatility.60",vol,50+(0.12-vol)*120,"MARKET REGIME","OKX")
- hi=max(p[-120:]); lo=min(p[-120:]); pos=50 if hi==lo else (px-lo)/(hi-lo)*100
- E.update("regime.range_position.120",pos,pos,"MARKET REGIME","OKX")
+  ma=sum(p[-n:])/n; z=(px/ma-1)*100; E.update(f"regime.trend.{n}",z,50+z*12,"MARKET REGIME","OKX")
+ hi=max(p[-120:]); lo=min(p[-120:]); pos=50 if hi==lo else (px-lo)/(hi-lo)*100; E.update("regime.range.120",pos,pos,"MARKET REGIME","OKX")
 
 async def macro_loop(session):
  key=os.getenv("FRED_API_KEY")
- if not key:
-  log.warning("FRED_API_KEY missing; MACRO remains N/A"); return
- series={"DGS10":-1,"DFF":-1,"DTWEXBGS":-1}
+ if not key: log.warning("FRED_API_KEY missing; MACRO remains N/A"); return
  while True:
-  for sid,direction in series.items():
+  for sid in ("DGS10","DFF","DTWEXBGS"):
    try:
     params={"series_id":sid,"api_key":key,"file_type":"json","sort_order":"desc","limit":2}
-    async with session.get("https://api.stlouisfed.org/fred/series/observations",params=params,timeout=20) as r:x=await r.json()
-    vals=[float(o["value"]) for o in x.get("observations",[]) if o.get("value") not in (None,".")]
+    async with session.get("https://api.stlouisfed.org/fred/series/observations",params=params,timeout=20) as r:d=await r.json()
+    vals=[float(o["value"]) for o in d.get("observations",[]) if o.get("value") not in (None,".")]
     if vals:
-     delta=vals[0]-vals[1] if len(vals)>1 else 0
-     E.update(f"macro.{sid}.level",vals[0],50+direction*delta*10,"MACRO","FRED")
-     if len(vals)>1:E.update(f"macro.{sid}.change",delta,50+direction*delta*20,"MACRO","FRED")
+     delta=vals[0]-vals[1] if len(vals)>1 else 0; E.update(f"macro.{sid}",vals[0],50-delta*15,"MACRO","FRED")
    except Exception as ex: log.warning("FRED %s %s",sid,ex)
   await asyncio.sleep(1800)
 
