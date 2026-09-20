@@ -26,11 +26,11 @@ E=Engine(); prices=deque(maxlen=5000); last_trade_side=None
 def price_features(px):
  prices.append(px); p=list(prices)
  if len(p)>1:
-  for n in (1,2,3,5,8,10,15,20,30,45,60,90,120,180,240,300,450,600,900,1200):
+  for n in (1,2,3,4,5,6,8,10,12,15,20,25,30,45,60,75,90,120,150,180,240,300,450,600,900,1200):
    if len(p)>n:
     r=(px/p[-n-1]-1)*100
     E.update(f"price.return.tick_{n}",r,50+r*12,"PRICE ACTION","OKX")
- for n in (5,8,10,13,20,21,30,34,50,55,75,89,100,144,200,233,300,377,500):
+ for n in (5,8,10,13,15,20,21,25,30,34,40,50,55,60,75,89,100,120,144,180,200,233,300,377,500):
   if len(p)>=n:
    w=p[-n:]; ma=sum(w)/n; d=(px/ma-1)*100
    E.update(f"technical.sma_distance.{n}",d,50+d*10,"TECHNICAL","OKX")
@@ -40,7 +40,7 @@ def price_features(px):
     E.update(f"technical.zscore.{n}",z,50+z*10,"TECHNICAL","OKX")
     vol=0 if mean==0 else sd/mean*100
     E.update(f"technical.volatility.{n}",vol,50+(1.5-vol)*5,"TECHNICAL","OKX")
- for n in (10,20,30,50,75,100,120,180,240,300,500,900):
+ for n in (10,15,20,25,30,40,50,60,75,100,120,150,180,240,300,500,900):
   if len(p)>=n:
    w=p[-n:]; hi=max(w); lo=min(w); pos=50 if hi==lo else (px-lo)/(hi-lo)*100
    E.update(f"price.range_position.{n}",pos,pos,"PRICE ACTION","OKX")
