@@ -21,7 +21,7 @@ class Engine:
   self.groups=groups; self.final=sum(groups.values())/len(groups) if groups else None
  def status(self):
   self.recalc(); return {"final":None if self.final is None else round(self.final,2),"groups":{k:round(v,2) for k,v in self.groups.items()},"features_active":sum(1 for v in self.features.values() if time.time()-v["ts"]<=STALE.get(v["source"],3600)),"features_total":len(self.features)}
-E=Engine(); prices=deque(maxlen=5000); last_trade_side=None
+E=Engine(); prices=deque(maxlen=5000); last_trade_side=None; btc_market={"price":None,"changes":{}}
 
 def price_features(px):
  prices.append(px); p=list(prices)
@@ -59,7 +59,7 @@ async def okx_ws():
      m=json.loads(raw); ch=m.get("arg",{}).get("channel")
      for d in m.get("data") or []:
       if ch=="tickers":
-       px=float(d["last"]); price_features(px)
+       px=float(d["last"]); btc_market["price"]=px; price_features(px)
        for key,mul in (("askPx",1),("bidPx",1)):
         if d.get(key): E.update("market."+key,float(d[key]),50,"LIQUIDITY","OKX")
        if d.get("askPx") and d.get("bidPx"):
@@ -95,6 +95,21 @@ async def mempool_loop(session):
     x=await r.json(); p=float(x.get("difficultyChange",0)); E.update("onchain.difficulty_change_pct",p,50+p*2,"ON-CHAIN","MEMPOOL")
   except Exception as ex: log.warning("mempool %s",ex)
   await asyncio.sleep(60)
+
+async def btc_timeframe_loop(session):
+ # Real OKX candle data; UI-only market context, not extra scoring features.
+ frames={"5m":"5m","15m":"15m","1h":"1H","4h":"4H","1d":"1D"}
+ while True:
+  for label,bar in frames.items():
+   try:
+    async with session.get("https://www.okx.com/api/v5/market/candles",params={"instId":"BTC-USDT","bar":bar,"limit":"2"},timeout=15) as r:
+     d=await r.json()
+    rows=d.get("data") or []
+    if rows:
+     latest=rows[0]; op=float(latest[1]); last=float(latest[4])
+     btc_market["changes"][label]=0 if op==0 else (last/op-1)*100
+   except Exception as ex: log.warning("BTC timeframe %s %s",label,ex)
+  await asyncio.sleep(30)
 
 async def cross_market_loop(session):
  while True:
@@ -225,7 +240,7 @@ async def http_handler(reader,writer):
    rows_html="".join(rows)
    body=f"""<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
 *{{box-sizing:border-box}}body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px;margin-bottom:4px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;width:75px}}.bar{{height:22px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative}}.bar i{{position:absolute;top:-4px;width:4px;height:30px;background:white;border-radius:3px;transform:translateX(-2px)}}.finalbar{{height:34px;margin-top:22px}}.finalbar i{{height:42px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:9px}}.na,small{{color:#71808d}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:12px;padding:10px 3px}}td:first-child{{width:120px}}}}
-</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small>AI-POWERED · REAL-TIME · EVENT-DRIVEN</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div></div><div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
+</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small>BTC: {("N/A" if btc_market["price"] is None else f"{btc_market['price']:,.2f}")} · 5m {("N/A" if "5m" not in btc_market["changes"] else f"{btc_market['changes']['5m']:+.2f}%")} · 15m {("N/A" if "15m" not in btc_market["changes"] else f"{btc_market['changes']['15m']:+.2f}%")} · 1h {("N/A" if "1h" not in btc_market["changes"] else f"{btc_market['changes']['1h']:+.2f}%")} · 4h {("N/A" if "4h" not in btc_market["changes"] else f"{btc_market['changes']['4h']:+.2f}%")} · 1d {("N/A" if "1d" not in btc_market["changes"] else f"{btc_market['changes']['1d']:+.2f}%")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div></div><div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
   writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
  except Exception as ex: log.warning("http %s",ex)
  finally:
@@ -241,5 +256,5 @@ async def heartbeat():
 
 async def main():
  async with aiohttp.ClientSession(headers={"User-Agent":"btc-agent-live/1.0"}) as s:
-  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),cross_market_loop(s),macro_loop(s),telegram_bot_loop(s),http_server(),heartbeat())
+  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),cross_market_loop(s),btc_timeframe_loop(s),macro_loop(s),telegram_bot_loop(s),http_server(),heartbeat())
 if __name__=="__main__": asyncio.run(main())
