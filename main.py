@@ -8,6 +8,21 @@ GROUPS=["TECHNICAL","PRICE ACTION","ORDER FLOW","DERIVATIVES","ON-CHAIN","SENTIM
 STALE={"OKX":30,"MEMPOOL":900,"ALTERNATIVE.ME":172800,"COINGECKO":900,"WORLDBANK":2592000}
 def clamp(x): return max(0,min(100,float(x)))
 
+TF_WEIGHTS={
+ "5M":{"PRICE ACTION":0.28,"ORDER FLOW":0.28,"LIQUIDITY":0.20,"TECHNICAL":0.10,"MARKET REGIME":0.10,"DERIVATIVES":0.04},
+ "15M":{"PRICE ACTION":0.24,"ORDER FLOW":0.22,"LIQUIDITY":0.16,"TECHNICAL":0.16,"MARKET REGIME":0.14,"DERIVATIVES":0.08},
+ "1H":{"PRICE ACTION":0.18,"ORDER FLOW":0.14,"LIQUIDITY":0.10,"TECHNICAL":0.20,"MARKET REGIME":0.18,"DERIVATIVES":0.12,"CROSS-MARKET":0.08},
+ "4H":{"PRICE ACTION":0.12,"ORDER FLOW":0.08,"LIQUIDITY":0.06,"TECHNICAL":0.22,"MARKET REGIME":0.20,"DERIVATIVES":0.14,"CROSS-MARKET":0.08,"ON-CHAIN":0.06,"SENTIMENT":0.04},
+ "1D":{"PRICE ACTION":0.08,"TECHNICAL":0.18,"MARKET REGIME":0.18,"DERIVATIVES":0.10,"CROSS-MARKET":0.12,"ON-CHAIN":0.12,"SENTIMENT":0.10,"MACRO":0.12},
+}
+def timeframe_finals(groups):
+ out={}
+ for tf,weights in TF_WEIGHTS.items():
+  pairs=[(groups[g],w) for g,w in weights.items() if g in groups]
+  sw=sum(w for _,w in pairs)
+  out[tf]=None if not sw else sum(v*w for v,w in pairs)/sw
+ return out
+
 class Engine:
  def __init__(self): self.features={}; self.groups={}; self.final=None
  def update(self,name,raw,score,group,source):
@@ -245,9 +260,11 @@ async def http_handler(reader,writer):
     if v is None: rows.append(f"<tr><td>{g}</td><td class=\"na\">N/A</td><td class=\"na\">Chưa có dữ liệu</td></tr>")
     else: rows.append(f"<tr><td>{g}</td><td><b>{v:.2f}</b></td><td><div class=\"bar\"><i style=\"left:{v}%\"></i></div></td></tr>")
    rows_html="".join(rows)
+   tf_scores=timeframe_finals(E.groups)
+   tf_html="".join(f'<div class="tfitem"><b>{tf}</b><span style="color:{("#00df79" if v is not None and v>=60 else "#ff4d4d" if v is not None and v<40 else "#ffd400")}">{("N/A" if v is None else f"{v:.2f}")}</span></div>' for tf,v in tf_scores.items())
    body=f"""<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
-*{{box-sizing:border-box}}body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px;margin-bottom:4px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;width:75px}}.bar{{height:22px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative}}.bar i{{position:absolute;top:-4px;width:4px;height:30px;background:white;border-radius:3px;transform:translateX(-2px)}}.finalbar{{height:34px;margin-top:22px}}.finalbar i{{height:42px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:9px}}.na,small{{color:#71808d}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:12px;padding:10px 3px}}td:first-child{{width:120px}}}}
-</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small><b style="color:#fff">BTC:</b> <b style="color:{('#00df79' if btc_market['changes'].get('1d',0)>=0 else '#ff4d4d')}">{("N/A" if btc_market["price"] is None else f"${btc_market['price']:,.2f}")}</b> · {market_change_html("5m")} · {market_change_html("15m")} · {market_change_html("1h")} · {market_change_html("4h")} · {market_change_html("1d")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div></div><div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
+*{{box-sizing:border-box}}body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px;margin-bottom:4px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;width:75px}}.bar{{height:22px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative}}.bar i{{position:absolute;top:-4px;width:4px;height:30px;background:white;border-radius:3px;transform:translateX(-2px)}}.finalbar{{height:34px;margin-top:22px}}.finalbar i{{height:42px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:9px}}.tfrow{{display:flex;gap:8px;margin-top:16px}}.tfitem{{flex:1;text-align:center;border:1px solid #19313d;border-radius:10px;padding:8px 3px}}.tfitem b{{display:block;color:#fff;font-size:12px}}.tfitem span{{font-size:16px;font-weight:800}}.na,small{{color:#71808d}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:12px;padding:10px 3px}}td:first-child{{width:120px}}}}
+</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small><b style="color:#fff">BTC:</b> <b style="color:{('#00df79' if btc_market['changes'].get('1d',0)>=0 else '#ff4d4d')}">{("N/A" if btc_market["price"] is None else f"${btc_market['price']:,.2f}")}</b> · {market_change_html("5m")} · {market_change_html("15m")} · {market_change_html("1h")} · {market_change_html("4h")} · {market_change_html("1d")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div><div class="tfrow">{tf_html}</div></div><div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
   writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
  except Exception as ex: log.warning("http %s",ex)
  finally:
