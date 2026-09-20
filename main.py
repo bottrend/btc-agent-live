@@ -104,8 +104,19 @@ def telegram_report():
  return "\n".join(lines)
 
 async def telegram_send(session,text):
- token=os.getenv("TELEGRAM_BOT_TOKEN"); chat=os.getenv("TELEGRAM_CHAT_ID")
- if not token or not chat:return
+ token=os.getenv("TELEGRAM_BOT_TOKEN")
+ if not token:return
+ chat=getattr(telegram_send,"chat_id",None)
+ if not chat:
+  try:
+   async with session.get(f"https://api.telegram.org/bot{token}/getUpdates",timeout=20) as r:
+    x=await r.json()
+    for u in reversed(x.get("result",[])):
+     msg=u.get("message") or u.get("channel_post") or {}
+     if msg.get("chat",{}).get("id") is not None:
+      chat=str(msg["chat"]["id"]); telegram_send.chat_id=chat; break
+  except Exception as ex: log.warning("telegram discover chat %s",ex)
+ if not chat:return
  try:
   async with session.post(f"https://api.telegram.org/bot{token}/sendMessage",json={"chat_id":chat,"text":text},timeout=20) as r:
    if r.status>=300: log.warning("telegram send HTTP %s %s",r.status,await r.text())
