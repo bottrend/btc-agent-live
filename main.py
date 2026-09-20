@@ -195,7 +195,9 @@ def signal_label(v):
 
 def telegram_report():
  s=E.status(); v=s["final"]
- lines=["₿ BTC AGENT LIVE",f"FINAL: {v if v is not None else 'N/A'} / 100  {signal_label(v)}",""]
+ tf=timeframe_finals(E.groups)
+ tf_line=" · ".join(f"{k}: {('N/A' if x is None else f'{x:.2f}')}" for k,x in tf.items())
+ lines=["₿ BTC AGENT LIVE",f"FINAL: {v if v is not None else 'N/A'} / 100  {signal_label(v)}",tf_line,""]
  for g in GROUPS: lines.append(f"{g}: {s['groups'].get(g,'N/A')}")
  lines += ["",f"FEATURES ACTIVE: {s['features_active']} / {s['features_total']}"]
  return "\n".join(lines)
