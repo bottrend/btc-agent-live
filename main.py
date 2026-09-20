@@ -315,7 +315,7 @@ async def analytics_loop():
   try:
    if btc_market["price"] is not None:
     s=E.status(); scores=dict(s["groups"]); scores["FINAL"]=s["final"]
-    db=sqlite3.connect(ANALYTICS_DB); db.execute("INSERT OR REPLACE INTO snapshots(ts,price,scores) VALUES(?,?,?)",(time.time(),btc_market["price"],json.dumps(scores))); db.commit(); db.close()
+    now=time.time(); db=sqlite3.connect(ANALYTICS_DB); db.execute("INSERT OR REPLACE INTO snapshots(ts,price,scores) VALUES(?,?,?)",(now,btc_market["price"],json.dumps(scores))); db.execute("DELETE FROM snapshots WHERE ts < ?",(now-7*86400,)); db.commit(); db.close()
   except Exception as ex: log.warning("analytics snapshot %s",ex)
   await asyncio.sleep(60)
 
