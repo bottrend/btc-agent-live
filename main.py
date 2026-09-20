@@ -116,14 +116,113 @@ async def macro_loop(session):
     obs=d[1] if isinstance(d,list) and len(d)>1 and isinstance(d[1],list) else []
     vals=[float(o["value"]) for o in obs if o.get("value") is not None]
     if vals:
-     current=vals[0]; prev=vals[1] if len(vals)>1 else current
-     delta=current-prev
-     score=50+delta*mul
-     E.update(f"macro.{name}",current,score,"MACRO","WORLDBANK")
+     current=vals[0]; prev=vals[1] if len(vals)>1 else current; delta=current-prev
+     E.update(f"macro.{name}",current,50+delta*mul,"MACRO","WORLDBANK")
      log.info("WorldBank MACRO %s value=%s delta=%s",sid,round(current,4),round(delta,4))
-    else:
-     log.warning("WorldBank %s no observations",sid)
-   except Exception as ex:
-    log.warning("WorldBank %s %s",sid,ex)
+    else: log.warning("WorldBank %s no observations",sid)
+   except Exception as ex: log.warning("WorldBank %s %s",sid,ex)
   await asyncio.sleep(21600)
 
+async def sentiment_loop(session):
+ while True:
+  try:
+   async with session.get("https://api.alternative.me/fng/?limit=1",timeout=15) as r:
+    x=await r.json(); v=float(x["data"][0]["value"]); E.update("sentiment.fear_greed",v,v,"SENTIMENT","ALTERNATIVE.ME")
+  except Exception as ex: log.warning("sentiment %s",ex)
+  await asyncio.sleep(3600)
+
+def signal_label(v):
+ if v is None: return "WAITING DATA"
+ if v<20:return "STRONG SELL"
+ if v<40:return "SELL"
+ if v<60:return "HOLD"
+ if v<80:return "BUY"
+ return "STRONG BUY"
+
+def telegram_report():
+ s=E.status(); v=s["final"]
+ lines=["₿ BTC AGENT LIVE",f"FINAL: {v if v is not None else 'N/A'} / 100  {signal_label(v)}",""]
+ for g in GROUPS: lines.append(f"{g}: {s['groups'].get(g,'N/A')}")
+ lines += ["",f"FEATURES ACTIVE: {s['features_active']} / {s['features_total']}"]
+ return "\n".join(lines)
+
+async def telegram_send(session,text):
+ token=os.getenv("TELEGRAM_BOT_TOKEN")
+ if not token:return
+ chat=getattr(telegram_send,"chat_id",None)
+ if not chat:
+  try:
+   async with session.get(f"https://api.telegram.org/bot{token}/getUpdates",timeout=20) as r:
+    x=await r.json()
+    for u in reversed(x.get("result",[])):
+     msg=u.get("message") or u.get("channel_post") or {}
+     if msg.get("chat",{}).get("id") is not None:
+      chat=str(msg["chat"]["id"]); telegram_send.chat_id=chat; break
+  except Exception as ex: log.warning("telegram discover chat %s",ex)
+ if not chat:return
+ try:
+  async with session.post(f"https://api.telegram.org/bot{token}/sendMessage",json={"chat_id":chat,"text":text},timeout=20) as r:
+   if r.status>=300: log.warning("telegram send HTTP %s %s",r.status,await r.text())
+ except Exception as ex: log.warning("telegram send %s",ex)
+
+async def telegram_bot_loop(session):
+ token=os.getenv("TELEGRAM_BOT_TOKEN")
+ if not token:
+  log.warning("TELEGRAM_BOT_TOKEN missing"); return
+ offset=0; last_report=0; enabled=True
+ while True:
+  try:
+   async with session.get(f"https://api.telegram.org/bot{token}/getUpdates",params={"timeout":25,"offset":offset},timeout=35) as r:
+    x=await r.json()
+   for u in x.get("result",[]):
+    offset=u["update_id"]+1
+    msg=u.get("message") or {}; chat=msg.get("chat",{}).get("id"); cmd=(msg.get("text") or "").split()[0].lower()
+    if chat is None: continue
+    telegram_send.chat_id=str(chat)
+    if cmd=="/start":
+     enabled=True; await telegram_send(session,"BTC Agent LIVE: ON\nBáo cáo tự động mỗi 5 phút.")
+    elif cmd=="/stop":
+     enabled=False; await telegram_send(session,"BTC Agent: OFF\nDùng /start để bật lại.")
+    elif cmd in ("/status","/score"):
+     await telegram_send(session,telegram_report())
+   if enabled and getattr(telegram_send,"chat_id",None) and time.time()-last_report>=300:
+    await telegram_send(session,telegram_report()); last_report=time.time()
+  except Exception as ex:
+   log.warning("telegram polling %s",ex); await asyncio.sleep(3)
+
+async def http_handler(reader,writer):
+ try:
+  line=await reader.readline(); path=line.decode(errors="ignore").split(" ")[1] if b" " in line else "/"
+  while True:
+   h=await reader.readline()
+   if h in (b"\r\n",b"\n",b""): break
+  s=E.status()
+  if path=="/health": body=json.dumps({"ok":True,**s}).encode(); ct="application/json"
+  else:
+   final=s["final"]; final_txt="N/A" if final is None else f"{final:.2f}"; final_pos=0 if final is None else final
+   rows=[]
+   for g in GROUPS:
+    v=s["groups"].get(g)
+    if v is None: rows.append(f"<tr><td>{g}</td><td class=\"na\">N/A</td><td class=\"na\">Chưa có dữ liệu</td></tr>")
+    else: rows.append(f"<tr><td>{g}</td><td><b>{v:.2f}</b></td><td><div class=\"bar\"><i style=\"left:{v}%\"></i></div></td></tr>")
+   rows_html="".join(rows)
+   body=f"""<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
+*{{box-sizing:border-box}}body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px;margin-bottom:4px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;width:75px}}.bar{{height:22px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative}}.bar i{{position:absolute;top:-4px;width:4px;height:30px;background:white;border-radius:3px;transform:translateX(-2px)}}.finalbar{{height:34px;margin-top:22px}}.finalbar i{{height:42px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:9px}}.na,small{{color:#71808d}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:12px;padding:10px 3px}}td:first-child{{width:120px}}}}
+</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small>AI-POWERED · REAL-TIME · EVENT-DRIVEN</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div></div><div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
+  writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
+ except Exception as ex: log.warning("http %s",ex)
+ finally:
+  writer.close(); await writer.wait_closed()
+
+async def http_server():
+ port=int(os.getenv("PORT","8080")); server=await asyncio.start_server(http_handler,"0.0.0.0",port)
+ log.info("HTTP listening on %s",port)
+ async with server: await server.serve_forever()
+
+async def heartbeat():
+ while True: log.info("STATE %s",json.dumps(E.status(),ensure_ascii=False)); await asyncio.sleep(10)
+
+async def main():
+ async with aiohttp.ClientSession(headers={"User-Agent":"btc-agent-live/1.0"}) as s:
+  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),cross_market_loop(s),macro_loop(s),telegram_bot_loop(s),http_server(),heartbeat())
+if __name__=="__main__": asyncio.run(main())
