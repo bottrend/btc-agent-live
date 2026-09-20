@@ -5,7 +5,7 @@ import aiohttp, websockets
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO"),format="%(asctime)s %(levelname)s %(message)s")
 log=logging.getLogger("btc-agent")
 GROUPS=["TECHNICAL","PRICE ACTION","ORDER FLOW","DERIVATIVES","ON-CHAIN","SENTIMENT","MACRO","CROSS-MARKET","LIQUIDITY","MARKET REGIME"]
-STALE={"OKX":30,"MEMPOOL":900,"ALTERNATIVE.ME":172800}
+STALE={"OKX":30,"MEMPOOL":900,"ALTERNATIVE.ME":172800,"COINGECKO":900,"FRED":172800}
 def clamp(x): return max(0,min(100,float(x)))
 
 class Engine:
@@ -35,6 +35,8 @@ def price_features(px):
  if len(prices)>=30:
   recent=list(prices)[-30:]; hi=max(recent); lo=min(recent)
   pos=50 if hi==lo else (px-lo)/(hi-lo)*100; E.update("price.range_position.30",pos,pos,"PRICE ACTION","OKX")
+
+ regime_features()
 
 async def okx_ws():
  url="wss://ws.okx.com:8443/ws/v5/public"
@@ -79,6 +81,51 @@ async def mempool_loop(session):
     x=await r.json(); p=float(x.get("difficultyChange",0)); E.update("onchain.difficulty_change_pct",p,50+p*2,"ON-CHAIN","MEMPOOL")
   except Exception as ex: log.warning("mempool %s",ex)
   await asyncio.sleep(60)
+
+async def cross_market_loop(session):
+ while True:
+  try:
+   url="https://api.coingecko.com/api/v3/simple/price"
+   async with session.get(url,params={"ids":"bitcoin,ethereum","vs_currencies":"usd","include_24hr_change":"true"},timeout=20) as r:x=await r.json()
+   bc=float(x["bitcoin"].get("usd_24h_change") or 0); ec=float(x["ethereum"].get("usd_24h_change") or 0)
+   E.update("cross.btc_24h_change",bc,50+bc*3,"CROSS-MARKET","COINGECKO")
+   E.update("cross.eth_24h_change",ec,50+ec*3,"CROSS-MARKET","COINGECKO")
+   E.update("cross.btc_vs_eth_24h",bc-ec,50+(bc-ec)*5,"CROSS-MARKET","COINGECKO")
+  except Exception as ex: log.warning("cross-market %s",ex)
+  await asyncio.sleep(300)
+
+def regime_features():
+ if len(prices)<120:return
+ p=list(prices); px=p[-1]
+ for n in (30,60,120):
+  ma=sum(p[-n:])/n; trend=(px/ma-1)*100
+  E.update(f"regime.trend.{n}",trend,50+trend*12,"MARKET REGIME","OKX")
+ rets=[(p[i]/p[i-1]-1)*100 for i in range(len(p)-59,len(p)) if p[i-1]]
+ if rets:
+  vol=(sum(x*x for x in rets)/len(rets))**0.5
+  E.update("regime.volatility.60",vol,50+(0.12-vol)*120,"MARKET REGIME","OKX")
+ hi=max(p[-120:]); lo=min(p[-120:]); pos=50 if hi==lo else (px-lo)/(hi-lo)*100
+ E.update("regime.range_position.120",pos,pos,"MARKET REGIME","OKX")
+
+async def macro_loop(session):
+ key=os.getenv("FRED_API_KEY")
+ if not key:
+  log.warning("FRED_API_KEY missing; MACRO remains N/A")
+  return
+ series={"DGS10":-1,"DFF":-1,"DTWEXBGS":-1}
+ while True:
+  for sid,direction in series.items():
+   try:
+    url="https://api.stlouisfed.org/fred/series/observations"
+    params={"series_id":sid,"api_key":key,"file_type":"json","sort_order":"desc","limit":2}
+    async with session.get(url,params=params,timeout=20) as r:x=await r.json()
+    vals=[float(o["value"]) for o in x.get("observations",[]) if o.get("value") not in (None,".")]
+    if vals:
+     delta=vals[0]-vals[1] if len(vals)>1 else 0
+     E.update(f"macro.{sid}.level",vals[0],50+direction*delta*10,"MACRO","FRED")
+     if len(vals)>1:E.update(f"macro.{sid}.change",delta,50+direction*delta*20,"MACRO","FRED")
+   except Exception as ex: log.warning("FRED %s %s",sid,ex)
+  await asyncio.sleep(1800)
 
 async def sentiment_loop(session):
  while True:
@@ -192,5 +239,5 @@ async def heartbeat():
 
 async def main():
  async with aiohttp.ClientSession(headers={"User-Agent":"btc-agent-live/1.0"}) as s:
-  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),telegram_bot_loop(s),http_server(),heartbeat())
+  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),cross_market_loop(s),macro_loop(s),telegram_bot_loop(s),http_server(),heartbeat())
 if __name__=="__main__": asyncio.run(main())
