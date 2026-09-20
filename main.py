@@ -153,17 +153,20 @@ async def http_handler(reader,writer):
   while True:
    h=await reader.readline()
    if h in (b"\r\n",b"\n",b""): break
-  if path=="/health":
-   body=json.dumps({"ok":True,**E.status()}).encode(); ct="application/json"
+  s=E.status()
+  if path=="/health": body=json.dumps({"ok":True,**s}).encode(); ct="application/json"
   else:
-   s=E.status(); rows="".join(f"<tr><td>{g}</td><td>{s['groups'].get(g,'N/A')}</td></tr>" for g in GROUPS)
-   body=f"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
-body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;font-weight:800;width:70px}}.bar{{height:20px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative;overflow:hidden}}.marker{{position:absolute;top:0;width:4px;height:100%;background:white}}.finalbar{{height:34px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:8px}}.na{{color:#71808d}}small{{color:#91a3bb}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:13px}}}}
-</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small>AI-POWERED · REAL-TIME · EVENT-DRIVEN</small>
-<div class="card"><small>FINAL SCORE</small><div class="score">{{s['final'] if s['final'] is not None else 'N/A'}} / 100</div><h2>{{signal_label(s['final'])}}</h2><div class="bar finalbar"><div class="marker" style="left:{{s['final'] or 0}}%"></div></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div></div>
-<div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{{''.join("<tr><td>"+g+"</td><td>"+str(s['groups'].get(g,'N/A'))+"</td><td>"+(("<div class='bar'><div class='marker' style='left:"+str(s['groups'][g])+"%'></div></div>") if g in s['groups'] else "<span class='na'>Chưa có dữ liệu</span>")+"</td></tr>" for g in GROUPS)}}</table><p><b>{{s['features_active']}} / {{s['features_total']}}</b> <span class="live">●</span> FEATURES ACTIVE</p></div>
-<div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính lại ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
-  writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
+   final=s["final"]; final_txt="N/A" if final is None else f"{final:.2f}"; final_pos=0 if final is None else final
+   rows=[]
+   for g in GROUPS:
+    v=s["groups"].get(g)
+    if v is None: rows.append(f"<tr><td>{g}</td><td class=\"na\">N/A</td><td class=\"na\">Chưa có dữ liệu</td></tr>")
+    else: rows.append(f"<tr><td>{g}</td><td><b>{v:.2f}</b></td><td><div class=\"bar\"><i style=\"left:{v}%\"></i></div></td></tr>")
+   rows_html="".join(rows)
+   body=f"""<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
+*{{box-sizing:border-box}}body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px;margin-bottom:4px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;width:75px}}.bar{{height:22px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative}}.bar i{{position:absolute;top:-4px;width:4px;height:30px;background:white;border-radius:3px;transform:translateX(-2px)}}.finalbar{{height:34px;margin-top:22px}}.finalbar i{{height:42px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:9px}}.na,small{{color:#71808d}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:12px;padding:10px 3px}}td:first-child{{width:120px}}}}
+</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small>AI-POWERED · REAL-TIME · EVENT-DRIVEN</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div></div><div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
+  writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
  except Exception as ex: log.warning("http %s",ex)
  finally:
   writer.close(); await writer.wait_closed()
