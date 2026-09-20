@@ -88,10 +88,38 @@ async def sentiment_loop(session):
   except Exception as ex: log.warning("sentiment %s",ex)
   await asyncio.sleep(3600)
 
+def signal_label(v):
+ if v is None: return "WAITING DATA"
+ if v<20:return "STRONG SELL"
+ if v<40:return "SELL"
+ if v<60:return "HOLD"
+ if v<80:return "BUY"
+ return "STRONG BUY"
+
+def telegram_report():
+ s=E.status(); v=s["final"]
+ lines=["₿ BTC AGENT LIVE",f"FINAL: {v if v is not None else 'N/A'} / 100  {signal_label(v)}",""]
+ for g in GROUPS: lines.append(f"{g}: {s['groups'].get(g,'N/A')}")
+ lines += ["",f"FEATURES ACTIVE: {s['features_active']} / {s['features_total']}"]
+ return "\n".join(lines)
+
+async def telegram_send(session,text):
+ token=os.getenv("TELEGRAM_BOT_TOKEN"); chat=os.getenv("TELEGRAM_CHAT_ID")
+ if not token or not chat:return
+ try:
+  async with session.post(f"https://api.telegram.org/bot{token}/sendMessage",json={"chat_id":chat,"text":text},timeout=20) as r:
+   if r.status>=300: log.warning("telegram send HTTP %s %s",r.status,await r.text())
+ except Exception as ex: log.warning("telegram send %s",ex)
+
+async def telegram_report_loop(session):
+ while True:
+  await asyncio.sleep(300)
+  await telegram_send(session,telegram_report())
+
 async def heartbeat():
  while True: log.info("STATE %s",json.dumps(E.status(),ensure_ascii=False)); await asyncio.sleep(10)
 
 async def main():
  async with aiohttp.ClientSession(headers={"User-Agent":"btc-agent-live/1.0"}) as s:
-  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),heartbeat())
+  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),telegram_report_loop(s),heartbeat())
 if __name__=="__main__": asyncio.run(main())
