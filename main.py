@@ -69,7 +69,11 @@ async def okx_ws():
        bids=d.get("bids",[]); asks=d.get("asks",[])
        for depth in (1,2,3,4,5):
         bv=sum(float(x[1]) for x in bids[:depth]); av=sum(float(x[1]) for x in asks[:depth]); tot=bv+av
-        if tot: E.update(f"orderflow.imbalance.depth_{depth}",(bv-av)/tot,50+50*(bv-av)/tot,"ORDER FLOW","OKX")
+        if tot:
+         imb=(bv-av)/tot
+         E.update(f"orderflow.imbalance.depth_{depth}",imb,50+50*imb,"ORDER FLOW","OKX")
+         if depth in (1,2,3,4,5):
+          E.update(f"liquidity.book_depth_ratio.{depth}",bv/av if av else 10,50+25*imb,"LIQUIDITY","OKX")
       elif ch=="trades":
        side=d.get("side"); sz=float(d.get("sz",0)); E.update("orderflow.last_trade_side",side,62 if side=="buy" else 38,"ORDER FLOW","OKX")
        E.update("orderflow.last_trade_size",sz,50,"ORDER FLOW","OKX")
