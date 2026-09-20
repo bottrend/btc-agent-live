@@ -122,15 +122,35 @@ async def telegram_send(session,text):
    if r.status>=300: log.warning("telegram send HTTP %s %s",r.status,await r.text())
  except Exception as ex: log.warning("telegram send %s",ex)
 
-async def telegram_report_loop(session):
+async def telegram_bot_loop(session):
+ token=os.getenv("TELEGRAM_BOT_TOKEN")
+ if not token:
+  log.warning("TELEGRAM_BOT_TOKEN missing"); return
+ offset=0; last_report=0; enabled=True
  while True:
-  await asyncio.sleep(300)
-  await telegram_send(session,telegram_report())
+  try:
+   async with session.get(f"https://api.telegram.org/bot{token}/getUpdates",params={"timeout":25,"offset":offset},timeout=35) as r:
+    x=await r.json()
+   for u in x.get("result",[]):
+    offset=u["update_id"]+1
+    msg=u.get("message") or {}; chat=msg.get("chat",{}).get("id"); cmd=(msg.get("text") or "").split()[0].lower()
+    if chat is None: continue
+    telegram_send.chat_id=str(chat)
+    if cmd=="/start":
+     enabled=True; await telegram_send(session,"BTC Agent LIVE: ON\nBáo cáo tự động mỗi 5 phút.")
+    elif cmd=="/stop":
+     enabled=False; await telegram_send(session,"BTC Agent: OFF\nDùng /start để bật lại.")
+    elif cmd in ("/status","/score"):
+     await telegram_send(session,telegram_report())
+   if enabled and getattr(telegram_send,"chat_id",None) and time.time()-last_report>=300:
+    await telegram_send(session,telegram_report()); last_report=time.time()
+  except Exception as ex:
+   log.warning("telegram polling %s",ex); await asyncio.sleep(3)
 
 async def heartbeat():
  while True: log.info("STATE %s",json.dumps(E.status(),ensure_ascii=False)); await asyncio.sleep(10)
 
 async def main():
  async with aiohttp.ClientSession(headers={"User-Agent":"btc-agent-live/1.0"}) as s:
-  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),telegram_report_loop(s),heartbeat())
+  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),telegram_bot_loop(s),heartbeat())
 if __name__=="__main__": asyncio.run(main())
