@@ -1,4 +1,4 @@
-import asyncio, json, logging, os, time
+import asyncio, json, logging, os, time, sqlite3
 from collections import deque
 import aiohttp, websockets
 
@@ -37,6 +37,31 @@ class Engine:
  def status(self):
   self.recalc(); return {"final":None if self.final is None else round(self.final,2),"groups":{k:round(v,2) for k,v in self.groups.items()},"features_active":sum(1 for v in self.features.values() if time.time()-v["ts"]<=STALE.get(v["source"],3600)),"features_total":len(self.features)}
 E=Engine(); prices=deque(maxlen=5000); last_trade_side=None; btc_market={"price":None,"changes":{}}
+ANALYTICS_DB=os.getenv("ANALYTICS_DB","/tmp/btc_analytics.db")
+HORIZONS={"5M":300,"15M":900,"1H":3600,"4H":14400,"1D":86400}
+def analytics_init():
+ db=sqlite3.connect(ANALYTICS_DB); db.execute("CREATE TABLE IF NOT EXISTS snapshots(ts REAL PRIMARY KEY, price REAL, scores TEXT)"); db.commit(); db.close()
+def analytics_stats():
+ try:
+  db=sqlite3.connect(ANALYTICS_DB); rows=db.execute("SELECT ts,price,scores FROM snapshots ORDER BY ts").fetchall(); db.close()
+  parsed=[(t,p,json.loads(s)) for t,p,s in rows]; out={}
+  for name in GROUPS+["FINAL"]:
+   out[name]={}
+   for h,sec in HORIZONS.items():
+    hit=n=0
+    for i,(t,p,scores) in enumerate(parsed):
+     sc=scores.get(name)
+     if sc is None or 40<=sc<=60: continue
+     target=t+sec; j=i+1
+     while j<len(parsed) and parsed[j][0]<target: j+=1
+     if j>=len(parsed): continue
+     move=parsed[j][1]-p
+     if (sc>60 and move>0) or (sc<40 and move<0): hit+=1
+     n+=1
+    out[name][h]=(100*hit/n if n else None,n)
+  return out
+ except Exception as ex:
+  log.warning("analytics stats %s",ex); return {}
 
 def price_features(px):
  prices.append(px); p=list(prices)
@@ -264,9 +289,16 @@ async def http_handler(reader,writer):
    rows_html="".join(rows)
    tf_scores=timeframe_finals(E.groups)
    tf_html="".join(f'<div class="tfitem"><b>{tf}</b><span style="color:{("#00df79" if v is not None and v>=60 else "#ff4d4d" if v is not None and v<40 else "#ffd400")}">{("N/A" if v is None else f"{v:.2f}")}</span></div>' for tf,v in tf_scores.items())
+   ast=analytics_stats()
+   acc_rows=[]
+   for name in GROUPS+["FINAL"]:
+    vals=ast.get(name,{})
+    cells="".join("<td>"+("N/A" if vals.get(h,(None,0))[0] is None else f"{vals[h][0]:.1f}%")+f"<small> n={vals.get(h,(None,0))[1]}</small></td>" for h in HORIZONS)
+    acc_rows.append(f"<tr><td>{name}</td>{cells}</tr>")
+   accuracy_html="".join(acc_rows)
    body=f"""<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
 *{{box-sizing:border-box}}body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px;margin-bottom:4px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;width:75px}}.bar{{height:22px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative}}.bar i{{position:absolute;top:-4px;width:4px;height:30px;background:white;border-radius:3px;transform:translateX(-2px)}}.finalbar{{height:34px;margin-top:22px}}.finalbar i{{height:42px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:9px}}.tfrow{{display:flex;gap:8px;margin-top:16px}}.tfitem{{flex:1;text-align:center;border:1px solid #19313d;border-radius:10px;padding:8px 3px}}.tfitem b{{display:block;color:#fff;font-size:12px}}.tfitem span{{font-size:16px;font-weight:800}}.na,small{{color:#71808d}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:12px;padding:10px 3px}}td:first-child{{width:120px}}}}
-</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small><b style="color:#fff">BTC:</b> <b style="color:{('#00df79' if btc_market['changes'].get('1d',0)>=0 else '#ff4d4d')}">{("N/A" if btc_market["price"] is None else f"${btc_market['price']:,.2f}")}</b> · {market_change_html("5m")} · {market_change_html("15m")} · {market_change_html("1h")} · {market_change_html("4h")} · {market_change_html("1d")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div><div class="tfrow">{tf_html}</div></div><div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
+</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small><b style="color:#fff">BTC:</b> <b style="color:{('#00df79' if btc_market['changes'].get('1d',0)>=0 else '#ff4d4d')}">{("N/A" if btc_market["price"] is None else f"${btc_market['price']:,.2f}")}</b> · {market_change_html("5m")} · {market_change_html("15m")} · {market_change_html("1h")} · {market_change_html("4h")} · {market_change_html("1d")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 BÁN MẠNH</span><span>20 BÁN</span><span>40</span><span>60 MUA</span><span>80</span><span>100 MUA MẠNH</span></div><div class="tfrow">{tf_html}</div></div><div class="card"><h2>ĐIỂM THEO NHÓM (10 NHÓM)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><h2>ĐỘ CHÍNH XÁC THEO GIÁ THỰC</h2><div style="overflow-x:auto"><table><tr><th>NHÓM</th><th>5M</th><th>15M</th><th>1H</th><th>4H</th><th>1D</th></tr>{accuracy_html}</table></div><small>Đúng chiều: score &gt;60 dự báo tăng hoặc &lt;40 dự báo giảm. n = số mẫu đã có kết quả.</small></div><div class="card"><b class="live">● LIVE</b><p>Cập nhật giao diện mỗi 5 giây · Engine tính ngay khi có dữ liệu mới.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
   writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
  except Exception as ex: log.warning("http %s",ex)
  finally:
@@ -277,10 +309,20 @@ async def http_server():
  log.info("HTTP listening on %s",port)
  async with server: await server.serve_forever()
 
+async def analytics_loop():
+ analytics_init()
+ while True:
+  try:
+   if btc_market["price"] is not None:
+    s=E.status(); scores=dict(s["groups"]); scores["FINAL"]=s["final"]
+    db=sqlite3.connect(ANALYTICS_DB); db.execute("INSERT OR REPLACE INTO snapshots(ts,price,scores) VALUES(?,?,?)",(time.time(),btc_market["price"],json.dumps(scores))); db.commit(); db.close()
+  except Exception as ex: log.warning("analytics snapshot %s",ex)
+  await asyncio.sleep(60)
+
 async def heartbeat():
  while True: log.info("STATE %s",json.dumps(E.status(),ensure_ascii=False)); await asyncio.sleep(10)
 
 async def main():
  async with aiohttp.ClientSession(headers={"User-Agent":"btc-agent-live/1.0"}) as s:
-  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),cross_market_loop(s),btc_timeframe_loop(s),macro_loop(s),telegram_bot_loop(s),http_server(),heartbeat())
+  await asyncio.gather(okx_ws(),mempool_loop(s),sentiment_loop(s),cross_market_loop(s),btc_timeframe_loop(s),macro_loop(s),telegram_bot_loop(s),analytics_loop(),http_server(),heartbeat())
 if __name__=="__main__": asyncio.run(main())
