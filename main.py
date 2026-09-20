@@ -165,9 +165,10 @@ async def sentiment_loop(session):
 
 def market_change_html(label):
  v=btc_market["changes"].get(label)
- if v is None: return f'{label} N/A'
- cls="up" if v>=0 else "down"
- return f'{label} <span class="{cls}">{v:+.2f}%</span>'
+ display=label.upper()
+ if v is None: return f'{display} N/A'
+ color="#00df79" if v>=0 else "#ff4d4d"
+ return f'{display} <span style="color:{color};font-weight:700">{v:+.2f}%</span>'
 
 def signal_label(v):
  if v is None: return "WAITING DATA"
