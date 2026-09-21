@@ -311,7 +311,7 @@ async def http_handler(reader,writer):
      main="N/A" if overall[0] is None else f"{overall[0]:.1f}%"
      up_txt="N/A" if up[0] is None else f"{up[0]:.1f}%"
      down_txt="N/A" if down[0] is None else f"{down[0]:.1f}%"
-     cells+=f'<td><span class="dirline">↑ {up_txt} ({up[1]})</span><span class="dirline">↓ {down_txt} ({down[1]})</span></td>'
+     cells+=f'<td><div class="dirline">↑ {up_txt} ({up[1]})</div><div class="dirline">↓ {down_txt} ({down[1]})</div></td>'
     acc_rows.append(f"<tr><td>{name}</td>{cells}</tr>")
    accuracy_html="".join(acc_rows)
    body=f"""<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
