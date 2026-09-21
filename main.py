@@ -49,36 +49,58 @@ def analytics_stats():
    if not vals:return None
    a=sorted(vals); m=len(a)//2
    return a[m] if len(a)%2 else (a[m-1]+a[m])/2
+  def dominant(vals):
+   if not vals:return None
+   counts={}
+   for v in vals: counts[v]=counts.get(v,0)+1
+   return max(counts,key=counts.get)
   for name in GROUPS+["FINAL"]:
    out[name]={}
    for h,sec in HORIZONS.items():
     hit=n=up_hit=up_n=down_hit=down_n=0
     up_fav=[]; up_adv=[]; down_fav=[]; down_adv=[]
+    up_end=[]; down_end=[]; up_score=[]; down_score=[]
+    up_tmfe=[]; up_tmae=[]; down_tmfe=[]; down_tmae=[]
+    up_ctx=[]; down_ctx=[]
     for i,(t,p,scores) in enumerate(parsed):
      sc=scores.get(name)
      if sc is None or 40<=sc<=60: continue
      target=t+sec; j=i+1
      while j<len(parsed) and parsed[j][0]<target: j+=1
      if j>=len(parsed): continue
-     move=parsed[j][1]-p
      path=[parsed[k][1] for k in range(i,j+1)]
-     high_move=(max(path)/p-1)*100
-     low_move=(min(path)/p-1)*100
-     ok=(sc>60 and move>0) or (sc<40 and move<0)
+     end_move=(parsed[j][1]/p-1)*100
+     hi=max(path); lo=min(path); hi_k=path.index(hi); lo_k=path.index(lo)
+     high_move=(hi/p-1)*100; low_move=(lo/p-1)*100
+     regime=scores.get("MARKET REGIME")
+     trend="BULL" if regime is not None and regime>60 else "BEAR" if regime is not None and regime<40 else "SIDE"
+     look=[parsed[k][1] for k in range(max(0,i-30),i+1)]
+     if len(look)>2:
+      rets=[abs((look[k]/look[k-1]-1)*100) for k in range(1,len(look))]
+      rv=sum(rets)/len(rets)
+      vol="HIGH VOL" if rv>=0.08 else "LOW VOL" if rv<0.03 else "MID VOL"
+     else: vol="VOL N/A"
+     ctx=f"{trend} · {vol}"
+     ok=(sc>60 and end_move>0) or (sc<40 and end_move<0)
      if ok: hit+=1
      n+=1
      if sc>60:
       up_n+=1; up_fav.append(max(0,high_move)); up_adv.append(min(0,low_move))
-      if move>0: up_hit+=1
+      up_end.append(end_move); up_score.append(sc); up_tmfe.append(hi_k); up_tmae.append(lo_k); up_ctx.append(ctx)
+      if end_move>0: up_hit+=1
      else:
       down_n+=1; down_fav.append(min(0,low_move)); down_adv.append(max(0,high_move))
-      if move<0: down_hit+=1
+      down_end.append(end_move); down_score.append(sc); down_tmfe.append(lo_k); down_tmae.append(hi_k); down_ctx.append(ctx)
+      if end_move<0: down_hit+=1
     out[name][h]={
      "all":(100*hit/n if n else None,n),
      "up":(100*up_hit/up_n if up_n else None,up_n),
      "down":(100*down_hit/down_n if down_n else None,down_n),
-     "up_range":(median(up_fav),median(up_adv)),
-     "down_range":(median(down_fav),median(down_adv))
+     "up_range":(median(up_fav),median(up_adv)), "down_range":(median(down_fav),median(down_adv)),
+     "up_end":median(up_end), "down_end":median(down_end),
+     "up_score":median(up_score), "down_score":median(down_score),
+     "up_time":(median(up_tmfe),median(up_tmae)), "down_time":(median(down_tmfe),median(down_tmae)),
+     "up_context":dominant(up_ctx), "down_context":dominant(down_ctx)
     }
   return out
  except Exception as ex:
@@ -326,9 +348,38 @@ async def http_handler(reader,writer):
      rows.append(f'<tr><td>{h}</td><td><div class="dirline">↑ {up_txt} ({up[1]}){ur_txt}</div><div class="dirline">↓ {down_txt} ({down[1]}){dr_txt}</div></td></tr>')
     acc_cards.append(f'<table class="accuracy miniacc"><tr><th>TIME</th><th>{name}</th></tr>{"".join(rows)}</table>')
    accuracy_html="".join(acc_cards)
+   def metric_cards(kind):
+    cards=[]
+    for name in GROUPS+["FINAL"]:
+     vals=ast.get(name,{}); mrows=[]
+     for h in HORIZONS:
+      st=vals.get(h,{})
+      if kind=="end":
+       u=st.get("up_end"); d=st.get("down_end")
+       ut="N/A" if u is None else f"{u:+.2f}%"; dt="N/A" if d is None else f"{d:+.2f}%"
+       detail=f'<div class="dirline">↑ {ut}</div><div class="dirline">↓ {dt}</div>'
+      elif kind=="score":
+       u=st.get("up_score"); d=st.get("down_score")
+       ut="N/A" if u is None else f"{u:.2f}"; dt="N/A" if d is None else f"{d:.2f}"
+       detail=f'<div class="dirline">↑ {ut}</div><div class="dirline">↓ {dt}</div>'
+      elif kind=="time":
+       u=st.get("up_time",(None,None)); d=st.get("down_time",(None,None))
+       ut="N/A" if u[0] is None else f"MFE {u[0]:.0f}m · MAE {u[1]:.0f}m"
+       dt="N/A" if d[0] is None else f"MFE {d[0]:.0f}m · MAE {d[1]:.0f}m"
+       detail=f'<div class="dirline">↑ {ut}</div><div class="dirline">↓ {dt}</div>'
+      else:
+       u=st.get("up_context") or "N/A"; d=st.get("down_context") or "N/A"
+       detail=f'<div class="dirline">↑ {u}</div><div class="dirline">↓ {d}</div>'
+      mrows.append(f'<tr><td>{h}</td><td>{detail}</td></tr>')
+     cards.append(f'<table class="accuracy miniacc"><tr><th>TIME</th><th>{name}</th></tr>{"".join(mrows)}</table>')
+    return "".join(cards)
+   endmove_html=metric_cards("end")
+   strength_html=metric_cards("score")
+   timing_html=metric_cards("time")
+   context_html=metric_cards("context")
    body=f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
 *{{box-sizing:border-box}}body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px;margin-bottom:4px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;width:75px}}table:not(.accuracy) td:nth-child(3){{width:55%}}.bar{{height:22px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative}}.bar i{{position:absolute;top:-4px;width:4px;height:30px;background:white;border-radius:3px;transform:translateX(-2px)}}.finalbar{{height:34px;margin-top:22px}}.finalbar i{{height:42px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:9px}}.tfrow{{display:flex;gap:8px;margin-top:16px}}.tfitem{{flex:1;text-align:center;border:1px solid #19313d;border-radius:10px;padding:8px 3px}}.tfitem b{{display:block;color:#fff;font-size:12px}}.tfitem span{{font-size:16px;font-weight:800}}.accgrid{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}}.accuracy{{min-width:0;font-size:11px;border:1px solid #19313d;border-radius:10px;overflow:hidden}}.accuracy th{{padding:8px 5px;text-align:center;font-size:11px;border-bottom:1px solid #18303a}}.accuracy th:first-child,.accuracy td:first-child{{text-align:center!important;white-space:nowrap;width:42px}}.accuracy td{{text-align:left!important;width:auto;padding:8px 5px;font-size:11px}}.accuracy td small{{display:block;font-size:8px;margin-top:1px}}.dirline{{white-space:nowrap;line-height:1.45}}.na,small{{color:#71808d}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:12px;padding:10px 3px}}td:first-child{{width:120px}}.accgrid{{grid-template-columns:1fr;gap:12px}}.miniacc td:first-child{{width:48px}}.miniacc td{{font-size:12px}}}}
-</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small><b style="color:#fff">BTC:</b> <b style="color:{('#00df79' if btc_market['changes'].get('1d',0)>=0 else '#ff4d4d')}">{("N/A" if btc_market["price"] is None else f"${btc_market['price']:,.2f}")}</b> · {market_change_html("5m")} · {market_change_html("15m")} · {market_change_html("1h")} · {market_change_html("4h")} · {market_change_html("1d")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 STRONG SELL</span><span>20 SELL</span><span>40</span><span>60 BUY</span><span>80</span><span>100 STRONG BUY</span></div><div class="tfrow">{tf_html}</div></div><div class="card"><h2>GROUP SCORES (10 GROUPS)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><h2>PRICE-DIRECTION ACCURACY</h2><div class="accgrid">{accuracy_html}</div><small>↑ = up prediction · ↓ = down prediction · number in parentheses = n · last two values = median favorable/adverse BTC move.</small></div><div class="card"><b class="live">● LIVE</b><p>Dashboard refreshes every 5 seconds · Engine recalculates as new data arrives.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
+</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small><b style="color:#fff">BTC:</b> <b style="color:{('#00df79' if btc_market['changes'].get('1d',0)>=0 else '#ff4d4d')}">{("N/A" if btc_market["price"] is None else f"${btc_market['price']:,.2f}")}</b> · {market_change_html("5m")} · {market_change_html("15m")} · {market_change_html("1h")} · {market_change_html("4h")} · {market_change_html("1d")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 STRONG SELL</span><span>20 SELL</span><span>40</span><span>60 BUY</span><span>80</span><span>100 STRONG BUY</span></div><div class="tfrow">{tf_html}</div></div><div class="card"><h2>GROUP SCORES (10 GROUPS)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><h2>PRICE-DIRECTION ACCURACY</h2><div class="accgrid">{accuracy_html}</div><small>↑ = up prediction · ↓ = down prediction · number in parentheses = n · last two values = median favorable/adverse BTC move.</small></div><div class="card"><h2>END MOVE</h2><div class="accgrid">{endmove_html}</div><small>Median BTC move at the end of each horizon, split by prediction direction.</small></div><div class="card"><h2>SCORE STRENGTH</h2><div class="accgrid">{strength_html}</div><small>Median entry score for each prediction direction.</small></div><div class="card"><h2>TIME TO MFE / MAE</h2><div class="accgrid">{timing_html}</div><small>Median minutes from entry to maximum favorable/adverse excursion.</small></div><div class="card"><h2>MARKET CONTEXT</h2><div class="accgrid">{context_html}</div><small>Most common entry context: MARKET REGIME direction plus recent realized volatility.</small></div><div class="card"><b class="live">● LIVE</b><p>Dashboard refreshes every 5 seconds · Engine recalculates as new data arrives.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
   writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
  except Exception as ex: log.warning("http %s",ex)
  finally:
