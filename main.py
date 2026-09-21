@@ -45,10 +45,15 @@ def analytics_stats():
  try:
   db=sqlite3.connect(ANALYTICS_DB); rows=db.execute("SELECT ts,price,scores FROM snapshots ORDER BY ts").fetchall(); db.close()
   parsed=[(t,p,json.loads(s)) for t,p,s in rows]; out={}
+  def median(vals):
+   if not vals:return None
+   a=sorted(vals); m=len(a)//2
+   return a[m] if len(a)%2 else (a[m-1]+a[m])/2
   for name in GROUPS+["FINAL"]:
    out[name]={}
    for h,sec in HORIZONS.items():
     hit=n=up_hit=up_n=down_hit=down_n=0
+    up_fav=[]; up_adv=[]; down_fav=[]; down_adv=[]
     for i,(t,p,scores) in enumerate(parsed):
      sc=scores.get(name)
      if sc is None or 40<=sc<=60: continue
@@ -56,19 +61,24 @@ def analytics_stats():
      while j<len(parsed) and parsed[j][0]<target: j+=1
      if j>=len(parsed): continue
      move=parsed[j][1]-p
+     path=[parsed[k][1] for k in range(i,j+1)]
+     high_move=(max(path)/p-1)*100
+     low_move=(min(path)/p-1)*100
      ok=(sc>60 and move>0) or (sc<40 and move<0)
      if ok: hit+=1
      n+=1
      if sc>60:
-      up_n+=1
+      up_n+=1; up_fav.append(max(0,high_move)); up_adv.append(min(0,low_move))
       if move>0: up_hit+=1
      else:
-      down_n+=1
+      down_n+=1; down_fav.append(min(0,low_move)); down_adv.append(max(0,high_move))
       if move<0: down_hit+=1
     out[name][h]={
      "all":(100*hit/n if n else None,n),
      "up":(100*up_hit/up_n if up_n else None,up_n),
-     "down":(100*down_hit/down_n if down_n else None,down_n)
+     "down":(100*down_hit/down_n if down_n else None,down_n),
+     "up_range":(median(up_fav),median(up_adv)),
+     "down_range":(median(down_fav),median(down_adv))
     }
   return out
  except Exception as ex:
@@ -311,12 +321,15 @@ async def http_handler(reader,writer):
      main="N/A" if overall[0] is None else f"{overall[0]:.1f}%"
      up_txt="N/A" if up[0] is None else f"{up[0]:.1f}%"
      down_txt="N/A" if down[0] is None else f"{down[0]:.1f}%"
-     cells+=f'<td><div class="dirline">↑ {up_txt} ({up[1]})</div><div class="dirline">↓ {down_txt} ({down[1]})</div></td>'
+     ur=stat.get("up_range",(None,None)); dr=stat.get("down_range",(None,None))
+     ur_txt="" if ur[0] is None else f" · {ur[0]:+.2f}%/{ur[1]:+.2f}%"
+     dr_txt="" if dr[0] is None else f" · {dr[0]:+.2f}%/{dr[1]:+.2f}%"
+     cells+=f'<td><div class="dirline">↑ {up_txt} ({up[1]}){ur_txt}</div><div class="dirline">↓ {down_txt} ({down[1]}){dr_txt}</div></td>'
     acc_rows.append(f"<tr><td>{name}</td>{cells}</tr>")
    accuracy_html="".join(acc_rows)
    body=f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><title>BTC Agent Live</title><style>
 *{{box-sizing:border-box}}body{{font-family:system-ui;background:#050b0f;color:#eef4ff;max-width:950px;margin:auto;padding:20px}}h1{{font-size:30px;margin-bottom:4px}}.card{{border:1px solid #19313d;border-radius:18px;padding:24px;margin:18px 0;background:#071118}}.score{{font-size:58px;font-weight:900}}.live{{color:#00df79}}table{{width:100%;border-collapse:collapse}}td{{padding:12px 5px;border-bottom:1px solid #18303a}}td:nth-child(2){{text-align:right;width:75px}}table:not(.accuracy) td:nth-child(3){{width:55%}}.bar{{height:22px;border-radius:12px;background:linear-gradient(90deg,#ff2828 0%,#ff7b22 25%,#ffd400 50%,#65df3c 75%,#00d878 100%);position:relative}}.bar i{{position:absolute;top:-4px;width:4px;height:30px;background:white;border-radius:3px;transform:translateX(-2px)}}.finalbar{{height:34px;margin-top:22px}}.finalbar i{{height:42px}}.ticks{{display:flex;justify-content:space-between;color:#91a3bb;font-size:11px;margin-top:9px}}.tfrow{{display:flex;gap:8px;margin-top:16px}}.tfitem{{flex:1;text-align:center;border:1px solid #19313d;border-radius:10px;padding:8px 3px}}.tfitem b{{display:block;color:#fff;font-size:12px}}.tfitem span{{font-size:16px;font-weight:800}}.accuracy{{min-width:0;font-size:11px}}.accuracy th{{padding:7px 3px;text-align:center;font-size:11px;border-bottom:1px solid #18303a}}.accuracy th:first-child,.accuracy td:first-child{{text-align:left;white-space:nowrap;width:118px}}.accuracy td{{text-align:center!important;width:auto;padding:8px 3px;font-size:11px}}.accuracy td small{{display:block;font-size:8px;margin-top:1px}}.accuracy tr:last-child td{{font-weight:800}}.na,small{{color:#71808d}}@media(max-width:600px){{body{{padding:14px}}.score{{font-size:46px}}.card{{padding:17px}}td{{font-size:12px;padding:10px 3px}}td:first-child{{width:120px}}}}
-</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small><b style="color:#fff">BTC:</b> <b style="color:{('#00df79' if btc_market['changes'].get('1d',0)>=0 else '#ff4d4d')}">{("N/A" if btc_market["price"] is None else f"${btc_market['price']:,.2f}")}</b> · {market_change_html("5m")} · {market_change_html("15m")} · {market_change_html("1h")} · {market_change_html("4h")} · {market_change_html("1d")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 STRONG SELL</span><span>20 SELL</span><span>40</span><span>60 BUY</span><span>80</span><span>100 STRONG BUY</span></div><div class="tfrow">{tf_html}</div></div><div class="card"><h2>GROUP SCORES (10 GROUPS)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><h2>PRICE-DIRECTION ACCURACY</h2><div style="overflow-x:auto"><table class="accuracy"><tr><th>Nhóm</th><th>5M</th><th>15M</th><th>1H</th><th>4H</th><th>1D</th></tr>{accuracy_html}</table></div><small>↑ = up prediction · ↓ = down prediction · number in parentheses = n.</small></div><div class="card"><b class="live">● LIVE</b><p>Dashboard refreshes every 5 seconds · Engine recalculates as new data arrives.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
+</style></head><body><h1>₿ BTC AGENT <span class="live">LIVE</span></h1><small><b style="color:#fff">BTC:</b> <b style="color:{('#00df79' if btc_market['changes'].get('1d',0)>=0 else '#ff4d4d')}">{("N/A" if btc_market["price"] is None else f"${btc_market['price']:,.2f}")}</b> · {market_change_html("5m")} · {market_change_html("15m")} · {market_change_html("1h")} · {market_change_html("4h")} · {market_change_html("1d")}</small><div class="card"><small>FINAL SCORE</small><div class="score">{final_txt} / 100</div><h2>{signal_label(final)}</h2><div class="bar finalbar"><i style="left:{final_pos}%"></i></div><div class="ticks"><span>0 STRONG SELL</span><span>20 SELL</span><span>40</span><span>60 BUY</span><span>80</span><span>100 STRONG BUY</span></div><div class="tfrow">{tf_html}</div></div><div class="card"><h2>GROUP SCORES (10 GROUPS)</h2><table>{rows_html}</table><p><b>{s["features_active"]} / {s["features_total"]}</b> <span class="live">●</span> FEATURES ACTIVE</p></div><div class="card"><h2>PRICE-DIRECTION ACCURACY</h2><div style="overflow-x:auto"><table class="accuracy"><tr><th>Nhóm</th><th>5M</th><th>15M</th><th>1H</th><th>4H</th><th>1D</th></tr>{accuracy_html}</table></div><small>↑ = up prediction · ↓ = down prediction · number in parentheses = n · last two values = median favorable/adverse BTC move.</small></div><div class="card"><b class="live">● LIVE</b><p>Dashboard refreshes every 5 seconds · Engine recalculates as new data arrives.</p></div></body></html>""".encode(); ct="text/html; charset=utf-8"
   writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nCache-Control: no-store\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body); await writer.drain()
  except Exception as ex: log.warning("http %s",ex)
  finally:
