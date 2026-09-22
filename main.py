@@ -64,7 +64,7 @@ def analytics_stats():
     up_ctx=[]; down_ctx=[]
     for i,(t,p,scores) in enumerate(parsed):
      sc=scores.get(name)
-     if sc is None or 40<=sc<=60: continue
+     if sc is None or sc==50: continue
      target=t+sec; j=i+1
      while j<len(parsed) and parsed[j][0]<target: j+=1
      if j>=len(parsed): continue
@@ -81,10 +81,10 @@ def analytics_stats():
       vol="HIGH VOL" if rv>=0.08 else "LOW VOL" if rv<0.03 else "MID VOL"
      else: vol="VOL N/A"
      ctx=f"{trend} · {vol}"
-     ok=(sc>60 and end_move>0) or (sc<40 and end_move<0)
+     ok=(sc>50 and end_move>0) or (sc<50 and end_move<0)
      if ok: hit+=1
      n+=1
-     if sc>60:
+     if sc>50:
       up_n+=1; up_fav.append(max(0,high_move)); up_adv.append(min(0,low_move))
       up_end.append(end_move); up_score.append(sc); up_tmfe.append(hi_k); up_tmae.append(lo_k); up_ctx.append(ctx)
       if end_move>0: up_hit+=1
